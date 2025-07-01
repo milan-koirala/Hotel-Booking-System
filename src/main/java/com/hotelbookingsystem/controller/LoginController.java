@@ -6,128 +6,100 @@ import java.sql.SQLException;
 
 import javax.servlet.ServletException;
 import javax.servlet.annotation.WebServlet;
-import javax.servlet.http.HttpServlet;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
-import javax.servlet.http.HttpSession;
+import javax.servlet.http.*;
 
 import com.hotelbookingsystem.DAO.UserDAO;
 import com.hotelbookingsystem.database.DatabaseConnection;
 import com.hotelbookingsystem.model.Users;
 import com.hotelbookingsystem.utility.EncryptDecrypt;
 
-@WebServlet(asyncSupported = true, urlPatterns = { "/LoginController" })
+@WebServlet(urlPatterns = {"/LoginController"})
 public class LoginController extends HttpServlet {
     private static final long serialVersionUID = 1L;
 
-    // Handle POST request (Login)
+    // POST: Handles login logic
     @Override
-	protected void doPost(HttpServletRequest request, HttpServletResponse response)
+    protected void doPost(HttpServletRequest request, HttpServletResponse response)
             throws ServletException, IOException {
-        
-        // Get form parameters (email & password)
+
         String email = request.getParameter("email");
         String password = request.getParameter("password");
-
-        // Get session
         HttpSession session = request.getSession();
-        session.setMaxInactiveInterval(60 * 60); // 1 hour in seconds
+        session.setMaxInactiveInterval(3600); // 1 hour
 
+        request.setAttribute("email", email); // Retain input if error occurs
 
-        // Store email for form repopulation
-        session.setAttribute("email", email);
+        // Validate inputs
+        if (email == null || email.trim().isEmpty()) {
+            request.setAttribute("errorMessage", "Email is required.");
+            forwardToLogin(request, response);
+            return;
+        }
 
-        Connection conn = null;
-        try {
-            // Validation for empty email or password
-            if (email == null || email.trim().isEmpty()) {
-                request.setAttribute("emailError", "Email is required");
-                request.getRequestDispatcher("access/login.jsp").forward(request, response);
-                return;
-            }
-            if (password == null || password.trim().isEmpty()) {
-                request.setAttribute("passwordError", "Password is required");
-                request.getRequestDispatcher("access/login.jsp").forward(request, response);
-                return;
-            }
+        if (password == null || password.trim().isEmpty()) {
+            request.setAttribute("errorMessage", "Password is required.");
+            forwardToLogin(request, response);
+            return;
+        }
 
-            // Get database connection
-            conn = DatabaseConnection.getConnection();
+        try (Connection conn = DatabaseConnection.getConnection()) {
             UserDAO userDAO = new UserDAO();
 
-            // Query user using encrypted password
-            // for customer 
-            Users users = userDAO.login(email, EncryptDecrypt.encrypt(password));
-            
-//            for admin
-//            Users users = userDAO.login(email, password);
+            String encryptedPassword = EncryptDecrypt.encrypt(password);
+            Users user = userDAO.login(email, encryptedPassword);
 
+            if (user != null) {
+                // Store session attributes
+                session.setAttribute("user_id", user.getUserId());
+                session.setAttribute("username", user.getUsername());
+                session.setAttribute("role", user.getRole());
+                session.setAttribute("email", user.getEmail());
+                session.setAttribute("currentUser", user);
 
-            if (users != null) {
-                // Login successful - Set session attributes
-                session.setAttribute("user_id", users.getUserId());
-                session.setAttribute("username", users.getUsername()); // Use username, not email
-                session.setAttribute("role", users.getRole());
-                session.setAttribute("email", users.getEmail());
-                session.setAttribute("loggedInCustomer", users); // Full user object stored in session
-
-                session.setAttribute("currentUser", users);
-                
-                session.removeAttribute("email");
-
-                // Redirect based on role
-                String role = users.getRole();
+                // Redirect by role
+                String role = user.getRole().toLowerCase();
                 String contextPath = request.getContextPath();
-
-                if ("admin".equalsIgnoreCase(role)) {
+                if ("admin".equals(role)) {
                     response.sendRedirect(contextPath + "/dashboard");
-                } else { // customer or other roles
+                } else {
                     response.sendRedirect(contextPath + "/customer/home.jsp");
                 }
             } else {
-                // Invalid email or password
-                request.setAttribute("passwordNotMatchError", "Invalid email or password");
-                request.getRequestDispatcher("access/login.jsp").forward(request, response);
+                request.setAttribute("errorMessage", "Invalid email or password.");
+                forwardToLogin(request, response);
             }
 
         } catch (SQLException | ClassNotFoundException e) {
             e.printStackTrace();
             request.setAttribute("errorMessage", "Database error: " + e.getMessage());
-            request.getRequestDispatcher("access/login.jsp").forward(request, response);
+            forwardToLogin(request, response);
         } catch (Exception e) {
             e.printStackTrace();
             request.setAttribute("errorMessage", "Unexpected error: " + e.getMessage());
-            request.getRequestDispatcher("access/login.jsp").forward(request, response);
-        } finally {
-            try {
-                // Connection pooling management assumed by DatabaseConnection
-                // If manual closing is needed, uncomment:
-                // if (conn != null) conn.close();
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
+            forwardToLogin(request, response);
         }
     }
 
-    // Handle GET request (Redirect to login page or home if already logged in)
+    // GET: Redirect or forward to login page
     @Override
-	protected void doGet(HttpServletRequest request, HttpServletResponse response)
+    protected void doGet(HttpServletRequest request, HttpServletResponse response)
             throws ServletException, IOException {
-        HttpSession session = request.getSession(false);
         
-        // If session exists and user is already logged in
+        HttpSession session = request.getSession(false);
         if (session != null && session.getAttribute("username") != null) {
-            // Redirect based on user role
             String role = (String) session.getAttribute("role");
             if ("admin".equalsIgnoreCase(role)) {
-            	response.sendRedirect("/admin/dashboard");
+                response.sendRedirect(request.getContextPath() + "/dashboard");
             } else {
-                request.getRequestDispatcher("customer/home.jsp").forward(request, response);
+                response.sendRedirect(request.getContextPath() + "/customer/home.jsp");
             }
-            return;
+        } else {
+            forwardToLogin(request, response);
         }
+    }
 
-        // If not logged in, show the login page
+    private void forwardToLogin(HttpServletRequest request, HttpServletResponse response)
+            throws ServletException, IOException {
         request.getRequestDispatcher("access/login.jsp").forward(request, response);
     }
 }
